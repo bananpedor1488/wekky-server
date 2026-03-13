@@ -17,6 +17,16 @@ let ytDlp;
 let ytDlpReadyPromise;
 let ytDlpBinaryPath;
 
+function withTimeout(promise, timeoutMs, label) {
+  if (!timeoutMs) return promise;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(`${label || 'timeout'} after ${timeoutMs}ms`)), timeoutMs)
+    )
+  ]);
+}
+
 function getYtDlp() {
   if (ytDlp) return ytDlp;
   if (!YTDlpWrapModule) {
@@ -44,7 +54,13 @@ async function ensureYtDlpReady() {
       const target = path.join(tmpDir, 'yt-dlp');
 
       if (typeof YTDlpWrap.downloadFromGithub === 'function') {
-        await YTDlpWrap.downloadFromGithub(target);
+        console.log('[yt-dlp] downloading binary to', target);
+        await withTimeout(
+          YTDlpWrap.downloadFromGithub(target),
+          60000,
+          'yt-dlp binary download'
+        );
+        console.log('[yt-dlp] binary ready');
       }
 
       ytDlpBinaryPath = target;
@@ -161,6 +177,7 @@ function findDownloadedFile(tmpDir, id) {
 router.get('/youtube/:id', async (req, res) => {
   try {
     const { id } = req.params;
+    console.log('[youtube]', id, 'request start');
     
     const tryFormats = [
       'bestaudio[acodec^=mp4a][ext=m4a]/bestaudio[acodec^=mp4a][ext=mp4]/bestaudio[acodec^=mp4a]',
@@ -197,6 +214,10 @@ router.get('/youtube/:id', async (req, res) => {
       } catch (e) {
         ytDlpError = e;
       }
+    }
+
+    if (ytDlpError) {
+      console.log('[youtube]', id, 'yt-dlp url probe error:', ytDlpError?.message);
     }
 
     const isExtSupported = !ext || ['m4a', 'mp4', 'webm'].includes(ext);
@@ -266,6 +287,7 @@ router.get('/youtube/:id', async (req, res) => {
       safeUnlink(path.join(tmpDir, `yt-${id}.webm`));
 
       try {
+        console.log('[youtube]', id, 'downloading mp4a format to', outTpl);
         await ytDlpExec([
           '--no-playlist',
           '--quiet',
@@ -280,6 +302,7 @@ router.get('/youtube/:id', async (req, res) => {
       } catch (e1) {
         console.error('YouTube download mp4a format failed:', { id, message: e1?.message });
         try {
+          console.log('[youtube]', id, 'downloading bestaudio to', outTpl);
           await ytDlpExec([
             '--no-playlist',
             '--quiet',
@@ -293,9 +316,12 @@ router.get('/youtube/:id', async (req, res) => {
           ], 120000);
         } catch (e2) {
           console.error('YouTube download bestaudio failed:', { id, message: e2?.message });
+          const msg = String(e2?.message || e1?.message || 'unknown error');
+          const isTimeout = msg.toLowerCase().includes('timeout');
           res.status(502);
           res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-          res.end(`youtube stream failed (yt-dlp): ${e2?.message || e1?.message || 'unknown error'}`);
+          res.end(`youtube stream failed (yt-dlp): ${msg}`);
+          if (isTimeout) res.status(504);
           return;
         }
       }
@@ -312,11 +338,16 @@ router.get('/youtube/:id', async (req, res) => {
 
     const downloadedExt = path.extname(downloadedPath).replace('.', '').toLowerCase();
     const contentType = downloadedExt === 'webm' ? 'audio/webm' : 'audio/mp4';
+    console.log('[youtube]', id, 'serving local file', downloadedPath, 'as', contentType);
     serveLocalFileWithRange(req, res, downloadedPath, contentType);
     
   } catch (error) {
     console.error('YouTube stream error:', error);
-    res.status(500).json({ success: false, error: 'Failed to get audio stream' });
+    const msg = String(error?.message || 'Failed to get audio stream');
+    const isTimeout = msg.toLowerCase().includes('timeout');
+    res.status(isTimeout ? 504 : 500);
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.end(msg);
   }
 });
 
