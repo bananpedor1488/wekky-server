@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const fs = require('fs');
 const path = require('path');
 const WebSocket = require('ws');
 const http = require('http');
@@ -11,7 +12,14 @@ const PORT = process.env.PORT || 3001;
 // Middleware
 app.use(cors());
 app.use(express.json());
-app.use(express.static(path.join(__dirname, '../client')));
+
+const clientDir = path.join(__dirname, '../client');
+const clientIndexFile = path.join(clientDir, 'index.html');
+const hasClient = fs.existsSync(clientDir) && fs.existsSync(clientIndexFile);
+
+if (hasClient) {
+  app.use(express.static(clientDir));
+}
 
 // Routes
 const youtubeRoutes = require('./routes/youtube');
@@ -28,15 +36,34 @@ app.use('/api/player', playerRoutes);
 app.use('/api/audio/stream', audioRoutes);
 app.use('/api/lyrics', lyricsRoutes);
 
+app.get('/api', (req, res) => {
+  res.json({
+    status: 'ok',
+    service: 'music-player-server',
+    timestamp: new Date().toISOString(),
+    endpoints: {
+      health: '/api/health',
+      youtube: '/api/youtube',
+      soundcloud: '/api/soundcloud',
+      search: '/api/search',
+      player: '/api/player',
+      audioStream: '/api/audio/stream',
+      lyrics: '/api/lyrics'
+    }
+  });
+});
+
 // Health check endpoint
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
 // Serve the main HTML file
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, '../client/index.html'));
-});
+if (hasClient) {
+  app.get('*', (req, res) => {
+    res.sendFile(clientIndexFile);
+  });
+}
 
 // Create HTTP server
 const server = http.createServer(app);
@@ -125,8 +152,10 @@ function handlePlayerCommand(action, payload) {
 
 // Start server
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`🎵 iOS Music Player Server running on http://localhost:${PORT}`);
-  console.log(`📱 API available at http://localhost:${PORT}/api`);
+  const externalUrl = process.env.RENDER_EXTERNAL_URL;
+  const baseUrl = externalUrl || `http://localhost:${PORT}`;
+  console.log(`🎵 iOS Music Player Server running on ${baseUrl}`);
+  console.log(`📱 API available at ${baseUrl}/api`);
 });
 
 module.exports = { app, server, wss };
