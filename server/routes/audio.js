@@ -117,12 +117,26 @@ async function ensureYtDlpReady() {
 
 async function ytDlpExec(args, timeoutMs = 30000) {
   const inst = await ensureYtDlpReady();
-  const p = inst.execPromise(injectCookiesArgs(args));
+  const finalArgs = injectCookiesArgs(args);
+  const p = inst.execPromise(finalArgs);
   if (!timeoutMs) return p;
   return await Promise.race([
     p,
     new Promise((_, reject) => setTimeout(() => reject(new Error('yt-dlp timeout')), timeoutMs))
   ]);
+}
+
+async function ytDlpExecLogged(label, args, timeoutMs) {
+  const start = Date.now();
+  try {
+    console.log('[yt-dlp]', label, 'start');
+    const out = await ytDlpExec(args, timeoutMs);
+    console.log('[yt-dlp]', label, 'ok', `${Date.now() - start}ms`);
+    return out;
+  } catch (e) {
+    console.log('[yt-dlp]', label, 'fail', `${Date.now() - start}ms`, e?.message);
+    throw e;
+  }
 }
 
 function pipeFetchBodyToRes(audioResponse, res) {
@@ -229,7 +243,7 @@ router.get('/youtube/:id', async (req, res) => {
 
     for (const format of tryFormats) {
       try {
-        const stdout = await ytDlpExec([
+        const stdout = await ytDlpExecLogged(`probe-url:${format}`, [
           '--no-playlist',
           '--quiet',
           '--no-warnings',
@@ -327,7 +341,7 @@ router.get('/youtube/:id', async (req, res) => {
 
       try {
         console.log('[youtube]', id, 'downloading mp4a format to', outTpl);
-        await ytDlpExec([
+        await ytDlpExecLogged('download-mp4a', [
           '--no-playlist',
           '--quiet',
           '--no-warnings',
@@ -342,7 +356,7 @@ router.get('/youtube/:id', async (req, res) => {
         console.error('YouTube download mp4a format failed:', { id, message: e1?.message });
         try {
           console.log('[youtube]', id, 'downloading bestaudio to', outTpl);
-          await ytDlpExec([
+          await ytDlpExecLogged('download-bestaudio', [
             '--no-playlist',
             '--quiet',
             '--no-warnings',
