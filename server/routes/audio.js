@@ -2,6 +2,9 @@ const express = require('express');
 const router = express.Router();
 const { spawn } = require('child_process');
 const { Readable } = require('stream');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
 const soundcloudProvider = require('../providers/soundcloudProvider');
 let YTDlpWrapModule;
 try {
@@ -52,6 +55,55 @@ function pipeFetchBodyToRes(audioResponse, res) {
   res.end();
 }
 
+function serveLocalFileWithRange(req, res, filePath, contentType) {
+  let stat;
+  try {
+    stat = fs.statSync(filePath);
+  } catch (e) {
+    res.status(404);
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.end('File not found');
+    return;
+  }
+
+  const total = stat.size;
+  const range = req.headers.range;
+
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type');
+  res.setHeader('Accept-Ranges', 'bytes');
+  res.setHeader('Content-Type', contentType || 'application/octet-stream');
+
+  if (!range) {
+    res.status(200);
+    res.setHeader('Content-Length', String(total));
+    fs.createReadStream(filePath).pipe(res);
+    return;
+  }
+
+  const m = /^bytes=(\d+)-(\d*)$/.exec(range);
+  if (!m) {
+    res.status(416);
+    res.setHeader('Content-Range', `bytes */${total}`);
+    res.end();
+    return;
+  }
+
+  const start = parseInt(m[1], 10);
+  const end = m[2] ? parseInt(m[2], 10) : total - 1;
+  if (Number.isNaN(start) || Number.isNaN(end) || start > end || start >= total) {
+    res.status(416);
+    res.setHeader('Content-Range', `bytes */${total}`);
+    res.end();
+    return;
+  }
+
+  res.status(206);
+  res.setHeader('Content-Range', `bytes ${start}-${end}/${total}`);
+  res.setHeader('Content-Length', String(end - start + 1));
+  fs.createReadStream(filePath, { start, end }).pipe(res);
+}
+
 // Stream YouTube audio via yt-dlp proxy
 router.get('/youtube/:id', async (req, res) => {
   try {
@@ -94,50 +146,108 @@ router.get('/youtube/:id', async (req, res) => {
       }
     }
 
-    if (!audioUrl) {
-      res.status(502);
+    const isExtSupported = !ext || ['m4a', 'mp4', 'webm'].includes(ext);
+
+    if (audioUrl && isExtSupported) {
+      try {
+        const range = req.headers.range;
+        const headers = {
+          'User-Agent': 'Mozilla/5.0',
+          'Accept': '*/*'
+        };
+        if (range) headers.Range = range;
+
+        const audioResponse = await fetch(audioUrl, { headers });
+        if (audioResponse.ok || audioResponse.status === 206) {
+          let contentType = audioResponse.headers.get('content-type') || '';
+          if (!contentType) {
+            if (ext === 'webm') contentType = 'audio/webm';
+            else contentType = 'audio/mp4';
+          }
+          const acceptRanges = audioResponse.headers.get('accept-ranges') || 'bytes';
+          const contentLength = audioResponse.headers.get('content-length');
+          const contentRange = audioResponse.headers.get('content-range');
+
+          res.status(audioResponse.status);
+          res.setHeader('Access-Control-Allow-Origin', '*');
+          res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type');
+          res.setHeader('Content-Type', contentType);
+          res.setHeader('Accept-Ranges', acceptRanges);
+          if (contentLength) res.setHeader('Content-Length', contentLength);
+          if (contentRange) res.setHeader('Content-Range', contentRange);
+          pipeFetchBodyToRes(audioResponse, res);
+          return;
+        }
+      } catch (e) {}
+    }
+
+    if (ext && !isExtSupported) {
+      res.status(415);
       res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-      res.end(`yt-dlp failed to get audio url${ytDlpError?.message ? `: ${ytDlpError.message}` : ''}`);
+      res.end(`Unsupported YouTube audio format: ${ext}`);
       return;
     }
 
-    if (ext && !['m4a', 'mp4', 'webm'].includes(ext)) {
-      return res.status(415).json({
-        success: false,
-        error: `Unsupported YouTube audio format: ${ext}`
-      });
+    let finalExt = ext;
+    if (!finalExt) {
+      try {
+        const stdoutExt = await ytDlpExec([
+          '--no-playlist',
+          '--quiet',
+          '--no-warnings',
+          '-f',
+          tryFormats[0],
+          '--print',
+          '%(ext)s',
+          `https://youtube.com/watch?v=${id}`
+        ], 30000);
+        finalExt = String(stdoutExt || '').trim().split(/\r?\n/).pop()?.trim()?.toLowerCase();
+      } catch (e) {
+        finalExt = 'm4a';
+      }
     }
 
-    const range = req.headers.range;
-    const headers = {
-      'User-Agent': 'Mozilla/5.0',
-      'Accept': '*/*'
-    };
-    if (range) headers.Range = range;
+    const safeExt = ['m4a', 'mp4', 'webm'].includes(finalExt) ? finalExt : 'm4a';
+    const tmpDir = os.tmpdir();
+    const filePath = path.join(tmpDir, `yt-${id}.${safeExt}`);
 
-    const audioResponse = await fetch(audioUrl, { headers });
-    if (!audioResponse.ok && audioResponse.status !== 206) {
-      return res.status(502).json({ success: false, error: 'Failed to fetch audio' });
+    if (!fs.existsSync(filePath)) {
+      try {
+        await ytDlpExec([
+          '--no-playlist',
+          '--quiet',
+          '--no-warnings',
+          '--no-part',
+          '-f',
+          tryFormats[0],
+          '-o',
+          filePath,
+          `https://youtube.com/watch?v=${id}`
+        ], 120000);
+      } catch (e1) {
+        try {
+          await ytDlpExec([
+            '--no-playlist',
+            '--quiet',
+            '--no-warnings',
+            '--no-part',
+            '-f',
+            tryFormats[1],
+            '-o',
+            filePath,
+            `https://youtube.com/watch?v=${id}`
+          ], 120000);
+        } catch (e2) {
+          res.status(502);
+          res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+          res.end(`yt-dlp download failed${(e2?.message || e1?.message) ? `: ${e2?.message || e1?.message}` : ''}`);
+          return;
+        }
+      }
     }
 
-    let contentType = audioResponse.headers.get('content-type') || '';
-    if (!contentType) {
-      if (ext === 'webm') contentType = 'audio/webm';
-      else contentType = 'audio/mp4';
-    }
-    const acceptRanges = audioResponse.headers.get('accept-ranges') || 'bytes';
-    const contentLength = audioResponse.headers.get('content-length');
-    const contentRange = audioResponse.headers.get('content-range');
-
-    res.status(audioResponse.status);
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type');
-    res.setHeader('Content-Type', contentType);
-    res.setHeader('Accept-Ranges', acceptRanges);
-    if (contentLength) res.setHeader('Content-Length', contentLength);
-    if (contentRange) res.setHeader('Content-Range', contentRange);
-
-    pipeFetchBodyToRes(audioResponse, res);
+    const contentType = safeExt === 'webm' ? 'audio/webm' : 'audio/mp4';
+    serveLocalFileWithRange(req, res, filePath, contentType);
     
   } catch (error) {
     console.error('YouTube stream error:', error);
