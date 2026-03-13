@@ -57,47 +57,54 @@ router.get('/youtube/:id', async (req, res) => {
   try {
     const { id } = req.params;
     
-    // Get direct audio URL using yt-dlp
-    // iOS Safari does NOT support webm/opus well, prefer m4a/mp4
-    // Also many Android WebViews fail on webm/opus, so we hard-require mp4a.
-    const format = 'bestaudio[acodec^=mp4a][ext=m4a]/bestaudio[acodec^=mp4a][ext=mp4]/bestaudio[acodec^=mp4a]';
-    let stdout;
-    try {
-      stdout = await ytDlpExec([
-        '--no-playlist',
-        '--quiet',
-        '--no-warnings',
-        '-f',
-        format,
-        '--print',
-        '%(url)s',
-        '--print',
-        '%(ext)s',
-        `https://youtube.com/watch?v=${id}`
-      ], 30000);
-    } catch (e) {
+    const tryFormats = [
+      'bestaudio[acodec^=mp4a][ext=m4a]/bestaudio[acodec^=mp4a][ext=mp4]/bestaudio[acodec^=mp4a]',
+      'bestaudio'
+    ];
+
+    let audioUrl;
+    let ext;
+    let ytDlpError;
+
+    for (const format of tryFormats) {
+      try {
+        const stdout = await ytDlpExec([
+          '--no-playlist',
+          '--quiet',
+          '--no-warnings',
+          '-f',
+          format,
+          '--print',
+          '%(url)s',
+          '--print',
+          '%(ext)s',
+          `https://youtube.com/watch?v=${id}`
+        ], 30000);
+
+        const lines = String(stdout || '')
+          .split(/\r?\n/)
+          .map(l => l.trim())
+          .filter(Boolean);
+
+        audioUrl = lines.find(l => l.startsWith('http'));
+        ext = (lines.find(l => !l.startsWith('http')) || '').toLowerCase();
+        if (audioUrl) break;
+      } catch (e) {
+        ytDlpError = e;
+      }
+    }
+
+    if (!audioUrl) {
       res.status(502);
       res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-      res.end('yt-dlp failed to find mp4a audio format');
+      res.end(`yt-dlp failed to get audio url${ytDlpError?.message ? `: ${ytDlpError.message}` : ''}`);
       return;
     }
 
-    const lines = String(stdout || '')
-      .split(/\r?\n/)
-      .map(l => l.trim())
-      .filter(Boolean);
-
-    const audioUrl = lines.find(l => l.startsWith('http'));
-    const ext = (lines.find(l => !l.startsWith('http')) || '').toLowerCase();
-    
-    if (!audioUrl) {
-      return res.status(404).json({ success: false, error: 'Audio URL not found' });
-    }
-
-    if (ext && !['m4a', 'mp4'].includes(ext)) {
+    if (ext && !['m4a', 'mp4', 'webm'].includes(ext)) {
       return res.status(415).json({
         success: false,
-        error: `Unsupported YouTube audio format for mobile: ${ext}`
+        error: `Unsupported YouTube audio format: ${ext}`
       });
     }
 
@@ -110,12 +117,14 @@ router.get('/youtube/:id', async (req, res) => {
 
     const audioResponse = await fetch(audioUrl, { headers });
     if (!audioResponse.ok && audioResponse.status !== 206) {
-      return res.status(500).json({ success: false, error: 'Failed to fetch audio' });
+      return res.status(502).json({ success: false, error: 'Failed to fetch audio' });
     }
 
-    // Forward important headers for iOS/Android
-    // Keep mobile happy: use audio/mp4 for mp4/m4a
-    const contentType = 'audio/mp4';
+    let contentType = audioResponse.headers.get('content-type') || '';
+    if (!contentType) {
+      if (ext === 'webm') contentType = 'audio/webm';
+      else contentType = 'audio/mp4';
+    }
     const acceptRanges = audioResponse.headers.get('accept-ranges') || 'bytes';
     const contentLength = audioResponse.headers.get('content-length');
     const contentRange = audioResponse.headers.get('content-range');
