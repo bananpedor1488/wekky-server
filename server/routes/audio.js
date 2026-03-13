@@ -35,8 +35,22 @@ async function ensureYtDlpReady() {
 
   ytDlpReadyPromise = (async () => {
     try {
-      if (typeof inst.downloadFromGithub === 'function') {
-        await inst.downloadFromGithub();
+      let binPath;
+
+      // yt-dlp-wrap supports both static and instance download helpers depending on version.
+      if (YTDlpWrapModule && typeof YTDlpWrapModule.downloadFromGithub === 'function') {
+        binPath = await YTDlpWrapModule.downloadFromGithub();
+      } else if (typeof inst.downloadFromGithub === 'function') {
+        binPath = await inst.downloadFromGithub();
+      }
+
+      if (binPath) {
+        // Make sure execPromise uses the downloaded binary (avoid spawning `yt-dlp` from PATH).
+        if (typeof inst.setBinaryPath === 'function') {
+          inst.setBinaryPath(binPath);
+        } else {
+          inst.binaryPath = binPath;
+        }
       }
     } catch (e) {
       ytDlpReadyPromise = null;
