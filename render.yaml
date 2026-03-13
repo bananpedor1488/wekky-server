@@ -1,0 +1,19 @@
+{
+  "name": "music-player-server",
+  "type": "web_service",
+  "runtime": "node",
+  "buildCommand": "npm install",
+  "startCommand": "npm start",
+  "envVars": [
+    {
+      "key": "PORT",
+      "value": "10000"
+    },
+    {
+      "key": "NODE_ENV",
+      "value": "production"
+    }
+  ],
+  "healthCheckPath": "/api/health",
+  "plan": "standard"
+}
