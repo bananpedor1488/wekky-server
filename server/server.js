@@ -9,9 +9,26 @@ const https = require('https');
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+process.on('unhandledRejection', (reason) => {
+  console.error('unhandledRejection:', reason);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('uncaughtException:', err);
+});
+
 // Middleware
 app.use(cors());
 app.use(express.json());
+
+app.use((req, res, next) => {
+  const start = Date.now();
+  res.on('finish', () => {
+    const ms = Date.now() - start;
+    console.log(`${req.method} ${req.originalUrl} -> ${res.statusCode} (${ms}ms)`);
+  });
+  next();
+});
 
 const clientDir = path.join(__dirname, '../client');
 const clientIndexFile = path.join(clientDir, 'index.html');

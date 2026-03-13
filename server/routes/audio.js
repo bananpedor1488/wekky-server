@@ -14,6 +14,8 @@ try {
 }
 
 let ytDlp;
+let ytDlpReadyPromise;
+
 function getYtDlp() {
   if (ytDlp) return ytDlp;
   if (!YTDlpWrapModule) {
@@ -24,8 +26,30 @@ function getYtDlp() {
   return ytDlp;
 }
 
-async function ytDlpExec(args, timeoutMs = 30000) {
+async function ensureYtDlpReady() {
   const inst = getYtDlp();
+  if (ytDlpReadyPromise) {
+    await ytDlpReadyPromise;
+    return inst;
+  }
+
+  ytDlpReadyPromise = (async () => {
+    try {
+      if (typeof inst.downloadFromGithub === 'function') {
+        await inst.downloadFromGithub();
+      }
+    } catch (e) {
+      ytDlpReadyPromise = null;
+      throw e;
+    }
+  })();
+
+  await ytDlpReadyPromise;
+  return inst;
+}
+
+async function ytDlpExec(args, timeoutMs = 30000) {
+  const inst = await ensureYtDlpReady();
   const p = inst.execPromise(args);
   if (!timeoutMs) return p;
   return await Promise.race([
@@ -104,6 +128,23 @@ function serveLocalFileWithRange(req, res, filePath, contentType) {
   fs.createReadStream(filePath, { start, end }).pipe(res);
 }
 
+function safeUnlink(filePath) {
+  try {
+    fs.unlinkSync(filePath);
+  } catch (e) {}
+}
+
+function findDownloadedFile(tmpDir, id) {
+  try {
+    const prefix = `yt-${id}.`;
+    const items = fs.readdirSync(tmpDir);
+    const match = items.find((n) => n.startsWith(prefix));
+    return match ? path.join(tmpDir, match) : null;
+  } catch (e) {
+    return null;
+  }
+}
+
 // Stream YouTube audio via yt-dlp proxy
 router.get('/youtube/:id', async (req, res) => {
   try {
@@ -153,6 +194,9 @@ router.get('/youtube/:id', async (req, res) => {
         const range = req.headers.range;
         const headers = {
           'User-Agent': 'Mozilla/5.0',
+          'Referer': 'https://www.youtube.com/',
+          'Origin': 'https://www.youtube.com',
+          'Accept-Language': 'en-US,en;q=0.9',
           'Accept': '*/*'
         };
         if (range) headers.Range = range;
@@ -178,7 +222,17 @@ router.get('/youtube/:id', async (req, res) => {
           pipeFetchBodyToRes(audioResponse, res);
           return;
         }
-      } catch (e) {}
+        console.error('YouTube upstream fetch failed:', {
+          id,
+          status: audioResponse.status,
+          range: req.headers.range
+        });
+      } catch (e) {
+        console.error('YouTube upstream fetch error:', {
+          id,
+          message: e?.message
+        });
+      }
     }
 
     if (ext && !isExtSupported) {
@@ -188,30 +242,17 @@ router.get('/youtube/:id', async (req, res) => {
       return;
     }
 
-    let finalExt = ext;
-    if (!finalExt) {
-      try {
-        const stdoutExt = await ytDlpExec([
-          '--no-playlist',
-          '--quiet',
-          '--no-warnings',
-          '-f',
-          tryFormats[0],
-          '--print',
-          '%(ext)s',
-          `https://youtube.com/watch?v=${id}`
-        ], 30000);
-        finalExt = String(stdoutExt || '').trim().split(/\r?\n/).pop()?.trim()?.toLowerCase();
-      } catch (e) {
-        finalExt = 'm4a';
-      }
-    }
-
-    const safeExt = ['m4a', 'mp4', 'webm'].includes(finalExt) ? finalExt : 'm4a';
     const tmpDir = os.tmpdir();
-    const filePath = path.join(tmpDir, `yt-${id}.${safeExt}`);
+    const outTpl = path.join(tmpDir, `yt-${id}.%(ext)s`);
 
-    if (!fs.existsSync(filePath)) {
+    // If already downloaded, serve from cache
+    let downloadedPath = findDownloadedFile(tmpDir, id);
+    if (!downloadedPath) {
+      // Cleanup possible stale target names
+      safeUnlink(path.join(tmpDir, `yt-${id}.m4a`));
+      safeUnlink(path.join(tmpDir, `yt-${id}.mp4`));
+      safeUnlink(path.join(tmpDir, `yt-${id}.webm`));
+
       try {
         await ytDlpExec([
           '--no-playlist',
@@ -221,10 +262,11 @@ router.get('/youtube/:id', async (req, res) => {
           '-f',
           tryFormats[0],
           '-o',
-          filePath,
+          outTpl,
           `https://youtube.com/watch?v=${id}`
         ], 120000);
       } catch (e1) {
+        console.error('YouTube download mp4a format failed:', { id, message: e1?.message });
         try {
           await ytDlpExec([
             '--no-playlist',
@@ -234,20 +276,31 @@ router.get('/youtube/:id', async (req, res) => {
             '-f',
             tryFormats[1],
             '-o',
-            filePath,
+            outTpl,
             `https://youtube.com/watch?v=${id}`
           ], 120000);
         } catch (e2) {
+          console.error('YouTube download bestaudio failed:', { id, message: e2?.message });
           res.status(502);
           res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-          res.end(`yt-dlp download failed${(e2?.message || e1?.message) ? `: ${e2?.message || e1?.message}` : ''}`);
+          res.end(`youtube stream failed (yt-dlp): ${e2?.message || e1?.message || 'unknown error'}`);
           return;
         }
       }
+
+      downloadedPath = findDownloadedFile(tmpDir, id);
     }
 
-    const contentType = safeExt === 'webm' ? 'audio/webm' : 'audio/mp4';
-    serveLocalFileWithRange(req, res, filePath, contentType);
+    if (!downloadedPath) {
+      res.status(502);
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      res.end('youtube stream failed: file not downloaded');
+      return;
+    }
+
+    const downloadedExt = path.extname(downloadedPath).replace('.', '').toLowerCase();
+    const contentType = downloadedExt === 'webm' ? 'audio/webm' : 'audio/mp4';
+    serveLocalFileWithRange(req, res, downloadedPath, contentType);
     
   } catch (error) {
     console.error('YouTube stream error:', error);
