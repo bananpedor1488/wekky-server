@@ -66,6 +66,16 @@ function injectCookiesArgs(args) {
   return ['--cookies', cookiesPath, ...args];
 }
 
+function injectDefaultYtDlpArgs(args) {
+  // Avoid duplicating if caller already set them
+  const out = [...args];
+  if (!out.includes('--socket-timeout')) out.unshift('10', '--socket-timeout');
+  if (!out.includes('--retries')) out.unshift('3', '--retries');
+  if (!out.includes('--fragment-retries')) out.unshift('3', '--fragment-retries');
+  if (!out.includes('--retry-sleep')) out.unshift('1', '--retry-sleep');
+  return out;
+}
+
 function getYtDlp() {
   if (ytDlp) return ytDlp;
   if (!YTDlpWrapModule) {
@@ -117,7 +127,7 @@ async function ensureYtDlpReady() {
 
 async function ytDlpExec(args, timeoutMs = 30000) {
   const inst = await ensureYtDlpReady();
-  const finalArgs = injectCookiesArgs(args);
+  const finalArgs = injectDefaultYtDlpArgs(injectCookiesArgs(args));
   const p = inst.execPromise(finalArgs);
   if (!timeoutMs) return p;
   return await Promise.race([
