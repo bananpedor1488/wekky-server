@@ -1,10 +1,35 @@
 const express = require('express');
 const router = express.Router();
-const { exec } = require('child_process');
 const { spawn } = require('child_process');
-const { promisify } = require('util');
 const { Readable } = require('stream');
-const execAsync = promisify(exec);
+const soundcloudProvider = require('../providers/soundcloudProvider');
+let YTDlpWrapModule;
+try {
+  YTDlpWrapModule = require('yt-dlp-wrap');
+} catch (e) {
+  YTDlpWrapModule = null;
+}
+
+let ytDlp;
+function getYtDlp() {
+  if (ytDlp) return ytDlp;
+  if (!YTDlpWrapModule) {
+    throw new Error('yt-dlp-wrap module not available');
+  }
+  const YTDlpWrap = YTDlpWrapModule.default || YTDlpWrapModule;
+  ytDlp = new YTDlpWrap();
+  return ytDlp;
+}
+
+async function ytDlpExec(args, timeoutMs = 30000) {
+  const inst = getYtDlp();
+  const p = inst.execPromise(args);
+  if (!timeoutMs) return p;
+  return await Promise.race([
+    p,
+    new Promise((_, reject) => setTimeout(() => reject(new Error('yt-dlp timeout')), timeoutMs))
+  ]);
+}
 
 function pipeFetchBodyToRes(audioResponse, res) {
   const body = audioResponse.body;
@@ -38,10 +63,18 @@ router.get('/youtube/:id', async (req, res) => {
     const format = 'bestaudio[acodec^=mp4a][ext=m4a]/bestaudio[acodec^=mp4a][ext=mp4]/bestaudio[acodec^=mp4a]';
     let stdout;
     try {
-      ({ stdout } = await execAsync(
-        `yt-dlp --no-playlist --quiet --no-warnings -f "${format}" --print "%(url)s" --print "%(ext)s" "https://youtube.com/watch?v=${id}"`,
-        { timeout: 30000 }
-      ));
+      stdout = await ytDlpExec([
+        '--no-playlist',
+        '--quiet',
+        '--no-warnings',
+        '-f',
+        format,
+        '--print',
+        '%(url)s',
+        '--print',
+        '%(ext)s',
+        `https://youtube.com/watch?v=${id}`
+      ], 30000);
     } catch (e) {
       res.status(502);
       res.setHeader('Content-Type', 'text/plain; charset=utf-8');
@@ -110,10 +143,15 @@ router.get('/youtube-mp3/:id', async (req, res) => {
     const { id } = req.params;
 
     // Use any bestaudio as input; ffmpeg outputs mp3
-    const { stdout } = await execAsync(
-      `yt-dlp --no-playlist --quiet --no-warnings -f bestaudio --get-url "https://youtube.com/watch?v=${id}"`,
-      { timeout: 30000 }
-    );
+    const stdout = await ytDlpExec([
+      '--no-playlist',
+      '--quiet',
+      '--no-warnings',
+      '-f',
+      'bestaudio',
+      '--get-url',
+      `https://youtube.com/watch?v=${id}`
+    ], 30000);
 
     const audioUrl = String(stdout || '').trim();
     if (!audioUrl) {
@@ -143,6 +181,17 @@ router.get('/youtube-mp3/:id', async (req, res) => {
     ], { stdio: ['ignore', 'pipe', 'pipe'] });
 
     ff.stdout.pipe(res);
+
+    ff.on('error', (err) => {
+      console.error('ffmpeg spawn error:', err);
+      if (!res.headersSent) {
+        res.status(500);
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      }
+      if (!res.writableEnded) {
+        res.end('Failed to transcode audio (ffmpeg not available)');
+      }
+    });
 
     ff.stderr.on('data', (d) => {
       console.log('[ffmpeg]', d.toString().slice(0, 300));
@@ -174,11 +223,8 @@ router.get('/soundcloud/:id', async (req, res) => {
   try {
     const { id } = req.params;
     
-    // Get SoundCloud stream URL from our existing API
-    const response = await fetch(`http://localhost:${process.env.PORT || 3001}/api/soundcloud/stream/${id}`);
-    const data = await response.json();
-    
-    if (!data.success || !data.stream?.url) {
+    const streamData = await soundcloudProvider.getStreamUrl(id);
+    if (!streamData?.url) {
       return res.status(404).json({ success: false, error: 'Stream not found' });
     }
 
@@ -190,7 +236,7 @@ router.get('/soundcloud/:id', async (req, res) => {
     if (range) headers.Range = range;
 
     // Proxy the stream through our server
-    const audioResponse = await fetch(data.stream.url, { headers });
+    const audioResponse = await fetch(streamData.url, { headers });
     
     if (!audioResponse.ok) {
       return res.status(500).json({ success: false, error: 'Failed to fetch audio' });

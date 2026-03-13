@@ -227,7 +227,7 @@ class PlayerManager extends EventEmitter {
     if (track.type === 'soundcloud' && track.streamUrl) {
       return `/api/audio/stream/soundcloud/${track.id}`;
     } else if (track.type === 'youtube') {
-      return `/api/audio/stream/youtube-mp3/${track.id}`;
+      return `/api/audio/stream/youtube/${track.id}`;
     }
     
     return null;
