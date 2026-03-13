@@ -69,10 +69,10 @@ function injectCookiesArgs(args) {
 function injectDefaultYtDlpArgs(args) {
   // Avoid duplicating if caller already set them
   const out = [...args];
-  if (!out.includes('--socket-timeout')) out.unshift('10', '--socket-timeout');
-  if (!out.includes('--retries')) out.unshift('3', '--retries');
-  if (!out.includes('--fragment-retries')) out.unshift('3', '--fragment-retries');
-  if (!out.includes('--retry-sleep')) out.unshift('1', '--retry-sleep');
+  if (!out.includes('--socket-timeout')) out.unshift('--socket-timeout', '10');
+  if (!out.includes('--retries')) out.unshift('--retries', '3');
+  if (!out.includes('--fragment-retries')) out.unshift('--fragment-retries', '3');
+  if (!out.includes('--retry-sleep')) out.unshift('--retry-sleep', '1');
   return out;
 }
 
@@ -244,6 +244,7 @@ router.get('/youtube/:id', async (req, res) => {
     
     const tryFormats = [
       'bestaudio[acodec^=mp4a][ext=m4a]/bestaudio[acodec^=mp4a][ext=mp4]/bestaudio[acodec^=mp4a]',
+      'bestaudio/best',
       'bestaudio'
     ];
 
