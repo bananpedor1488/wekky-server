@@ -16,6 +16,7 @@ try {
 let ytDlp;
 let ytDlpReadyPromise;
 let ytDlpBinaryPath;
+let ytDlpCookiesPath;
 
 function withTimeout(promise, timeoutMs, label) {
   if (!timeoutMs) return promise;
@@ -25,6 +26,44 @@ function withTimeout(promise, timeoutMs, label) {
       setTimeout(() => reject(new Error(`${label || 'timeout'} after ${timeoutMs}ms`)), timeoutMs)
     )
   ]);
+}
+
+function ensureYtDlpCookiesFile() {
+  if (ytDlpCookiesPath) return ytDlpCookiesPath;
+
+  const raw = process.env.YTDLP_COOKIES;
+  const b64 = process.env.YTDLP_COOKIES_BASE64;
+  if (!raw && !b64) return null;
+
+  let content = raw;
+  if (!content && b64) {
+    try {
+      content = Buffer.from(b64, 'base64').toString('utf8');
+    } catch (e) {
+      content = null;
+    }
+  }
+  if (!content) return null;
+
+  const tmpDir = os.tmpdir();
+  const p = path.join(tmpDir, 'yt-cookies.txt');
+  try {
+    fs.writeFileSync(p, content, { encoding: 'utf8', mode: 0o600 });
+    ytDlpCookiesPath = p;
+    console.log('[yt-dlp] cookies file written to', p);
+    return p;
+  } catch (e) {
+    console.error('[yt-dlp] failed to write cookies file:', e?.message);
+    return null;
+  }
+}
+
+function injectCookiesArgs(args) {
+  const cookiesPath = ensureYtDlpCookiesFile();
+  if (!cookiesPath) return args;
+  // Avoid duplicating cookies arg
+  if (args.includes('--cookies')) return args;
+  return ['--cookies', cookiesPath, ...args];
 }
 
 function getYtDlp() {
@@ -78,7 +117,7 @@ async function ensureYtDlpReady() {
 
 async function ytDlpExec(args, timeoutMs = 30000) {
   const inst = await ensureYtDlpReady();
-  const p = inst.execPromise(args);
+  const p = inst.execPromise(injectCookiesArgs(args));
   if (!timeoutMs) return p;
   return await Promise.race([
     p,
