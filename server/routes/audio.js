@@ -15,6 +15,7 @@ try {
 
 let ytDlp;
 let ytDlpReadyPromise;
+let ytDlpBinaryPath;
 
 function getYtDlp() {
   if (ytDlp) return ytDlp;
@@ -22,36 +23,33 @@ function getYtDlp() {
     throw new Error('yt-dlp-wrap module not available');
   }
   const YTDlpWrap = YTDlpWrapModule.default || YTDlpWrapModule;
-  ytDlp = new YTDlpWrap();
+  ytDlp = new YTDlpWrap(ytDlpBinaryPath);
   return ytDlp;
 }
 
 async function ensureYtDlpReady() {
-  const inst = getYtDlp();
   if (ytDlpReadyPromise) {
     await ytDlpReadyPromise;
-    return inst;
+    return getYtDlp();
   }
 
   ytDlpReadyPromise = (async () => {
     try {
-      let binPath;
-
-      // yt-dlp-wrap supports both static and instance download helpers depending on version.
-      if (YTDlpWrapModule && typeof YTDlpWrapModule.downloadFromGithub === 'function') {
-        binPath = await YTDlpWrapModule.downloadFromGithub();
-      } else if (typeof inst.downloadFromGithub === 'function') {
-        binPath = await inst.downloadFromGithub();
+      if (!YTDlpWrapModule) {
+        throw new Error('yt-dlp-wrap module not available');
       }
 
-      if (binPath) {
-        // Make sure execPromise uses the downloaded binary (avoid spawning `yt-dlp` from PATH).
-        if (typeof inst.setBinaryPath === 'function') {
-          inst.setBinaryPath(binPath);
-        } else {
-          inst.binaryPath = binPath;
-        }
+      const YTDlpWrap = YTDlpWrapModule.default || YTDlpWrapModule;
+      const tmpDir = os.tmpdir();
+      const target = path.join(tmpDir, 'yt-dlp');
+
+      if (typeof YTDlpWrap.downloadFromGithub === 'function') {
+        await YTDlpWrap.downloadFromGithub(target);
       }
+
+      ytDlpBinaryPath = target;
+      // Recreate instance with explicit binary path so it won't spawn `yt-dlp` from PATH.
+      ytDlp = new YTDlpWrap(ytDlpBinaryPath);
     } catch (e) {
       ytDlpReadyPromise = null;
       throw e;
@@ -59,7 +57,7 @@ async function ensureYtDlpReady() {
   })();
 
   await ytDlpReadyPromise;
-  return inst;
+  return getYtDlp();
 }
 
 async function ytDlpExec(args, timeoutMs = 30000) {
