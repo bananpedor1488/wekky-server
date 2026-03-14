@@ -11,6 +11,7 @@ class SoundCloudProvider {
     this.apiBaseUrl = 'https://api-v2.soundcloud.com';
     this.clientId = null;
     this.lastError = null;
+    this.clientIdMeta = { source: null, at: 0 };
     this.headers = {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       'Accept': 'application/json, text/plain, */*',
@@ -50,13 +51,17 @@ class SoundCloudProvider {
   /**
    * Get or refresh client ID from SoundCloud
    */
-  async getClientId() {
+  async getClientId(opts = {}) {
+    const { ignoreEnv = false, forceRefresh = false } = opts || {};
+
     const envClientId = process.env.SOUNDCLOUD_CLIENT_ID;
-    if (envClientId) {
+    if (!ignoreEnv && envClientId && !forceRefresh) {
       this.clientId = envClientId;
+      this.clientIdMeta = { source: 'env', at: Date.now() };
       return this.clientId;
     }
-    if (this.clientId) return this.clientId;
+
+    if (this.clientId && !forceRefresh) return this.clientId;
     
     try {
       // Fetch the main page to get scripts containing client ID
@@ -80,6 +85,7 @@ class SoundCloudProvider {
               const clientIdMatch = scriptResponse.data.match(/client_id[=:]"?([a-zA-Z0-9]+)"?/);
               if (clientIdMatch) {
                 this.clientId = clientIdMatch[1];
+                this.clientIdMeta = { source: 'extract', at: Date.now() };
                 return this.clientId;
               }
             } catch (e) {
@@ -93,6 +99,7 @@ class SoundCloudProvider {
       const inlineMatch = html.match(/client_id[=:]"?([a-zA-Z0-9]{32})"?/);
       if (inlineMatch) {
         this.clientId = inlineMatch[1];
+        this.clientIdMeta = { source: 'extract', at: Date.now() };
         return this.clientId;
       }
 
@@ -101,6 +108,7 @@ class SoundCloudProvider {
       console.error('Client ID error:', error.message);
       // Use a fallback client ID that often works
       this.clientId = 'khI8ciOiYPX6UVGInQY5zA0zvTkfzuuC';
+      this.clientIdMeta = { source: 'fallback', at: Date.now() };
       return this.clientId;
     }
   }
@@ -123,13 +131,47 @@ class SoundCloudProvider {
       const response = await axios.get(searchUrl, {
         headers: this.headers,
         params,
-        timeout: 10000
+        timeout: 10000,
+        validateStatus: () => true
       });
 
       if (response.status >= 400) {
         const msg = `SoundCloud API status ${response.status}`;
         this.lastError = { message: msg, status: response.status, data: response.data };
-        throw new Error(msg);
+
+        // client_id might be invalid/revoked; refresh once ignoring env.
+        if (response.status === 401) {
+          try {
+            this.clientId = null;
+            const refreshed = await this.getClientId({ forceRefresh: true, ignoreEnv: true });
+            const retryRes = await axios.get(searchUrl, {
+              headers: this.headers,
+              params: { ...params, client_id: refreshed },
+              timeout: 10000,
+              validateStatus: () => true
+            });
+
+            if (retryRes.status < 400) {
+              this.lastError = null;
+              const results = [];
+              const collection = retryRes.data?.collection || [];
+              for (const item of collection.slice(0, limit)) {
+                const track = this.parseTrack(item);
+                if (track) results.push(track);
+              }
+              return results;
+            }
+
+            const retryMsg = `SoundCloud API status ${retryRes.status}`;
+            this.lastError = { message: retryMsg, status: retryRes.status, data: retryRes.data };
+          } catch (e) {
+            // ignore and throw original below
+          }
+        }
+
+        const e = new Error(msg);
+        e.status = response.status;
+        throw e;
       }
 
       this.lastError = null;

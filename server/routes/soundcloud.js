@@ -23,7 +23,10 @@ router.get('/search', async (req, res) => {
     const lastError = typeof soundcloudProvider.getLastError === 'function'
       ? soundcloudProvider.getLastError()
       : null;
-    res.status(500).json({
+    const status = lastError?.status && lastError.status >= 400 && lastError.status < 600
+      ? lastError.status
+      : 500;
+    res.status(status).json({
       success: false,
       error: 'Search failed',
       message: error.message,
