@@ -1,66 +1,23 @@
 const express = require('express');
 const router = express.Router();
-const youtubeProvider = require('../providers/youtubeProvider');
 const soundcloudProvider = require('../providers/soundcloudProvider');
 
-// Combined search across YouTube Music and SoundCloud
+// SoundCloud-only search
 router.get('/', async (req, res) => {
   try {
-    const { q, sources = 'all', type = 'tracks', limit = 20 } = req.query;
+    const { q, type = 'tracks', limit = 20 } = req.query;
     
     if (!q) {
       return res.status(400).json({ error: 'Query parameter "q" is required' });
     }
 
-    const results = {
-      query: q,
-      youtube: [],
-      soundcloud: [],
-      total: 0
-    };
-
-    const searchPromises = [];
-    const sourceList = sources === 'all' ? ['youtube', 'soundcloud'] : sources.split(',');
-
-    // Search YouTube Music
-    if (sourceList.includes('youtube')) {
-      searchPromises.push(
-        youtubeProvider.search(q, type, parseInt(limit))
-          .then(results => ({ source: 'youtube', results }))
-          .catch(error => {
-            console.error('YouTube search error:', error);
-            return { source: 'youtube', results: [], error: error.message };
-          })
-      );
-    }
-
-    // Search SoundCloud
-    if (sourceList.includes('soundcloud')) {
-      searchPromises.push(
-        soundcloudProvider.search(q, type, parseInt(limit))
-          .then(results => ({ source: 'soundcloud', results }))
-          .catch(error => {
-            console.error('SoundCloud search error:', error);
-            return { source: 'soundcloud', results: [], error: error.message };
-          })
-      );
-    }
-
-    const searchResults = await Promise.all(searchPromises);
-
-    // Combine results
-    for (const result of searchResults) {
-      if (result.source === 'youtube') {
-        results.youtube = result.results;
-      } else if (result.source === 'soundcloud') {
-        results.soundcloud = result.results;
-      }
-      results.total += result.results.length;
-    }
+    const results = await soundcloudProvider.search(q, type, parseInt(limit));
 
     res.json({ 
       success: true, 
-      ...results
+      query: q,
+      count: results.length,
+      results
     });
   } catch (error) {
     console.error('Global search error:', error);
@@ -77,26 +34,14 @@ router.get('/suggestions', async (req, res) => {
       return res.json({ success: true, suggestions: [] });
     }
 
-    // Get quick results from both sources
-    const [youtubeResults, soundcloudResults] = await Promise.all([
-      youtubeProvider.search(q, 'songs', parseInt(limit)).catch(() => []),
-      soundcloudProvider.search(q, 'tracks', parseInt(limit)).catch(() => [])
-    ]);
+    const soundcloudResults = await soundcloudProvider.search(q, 'tracks', parseInt(limit)).catch(() => []);
 
-    const suggestions = [
-      ...youtubeResults.slice(0, limit).map(t => ({ 
-        text: `${t.title} - ${t.artist}`, 
-        type: 'track',
-        source: 'youtube',
-        id: t.id 
-      })),
-      ...soundcloudResults.slice(0, limit).map(t => ({ 
-        text: `${t.title} - ${t.artist}`, 
-        type: 'track',
-        source: 'soundcloud',
-        id: t.id 
-      }))
-    ].slice(0, limit * 2);
+    const suggestions = soundcloudResults.slice(0, limit).map(t => ({
+      text: `${t.title} - ${t.artist}`,
+      type: 'track',
+      source: 'soundcloud',
+      id: t.id
+    }));
 
     res.json({ success: true, suggestions });
   } catch (error) {

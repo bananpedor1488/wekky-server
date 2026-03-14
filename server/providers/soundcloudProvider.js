@@ -22,6 +22,11 @@ class SoundCloudProvider {
    * Get or refresh client ID from SoundCloud
    */
   async getClientId() {
+    const envClientId = process.env.SOUNDCLOUD_CLIENT_ID;
+    if (envClientId) {
+      this.clientId = envClientId;
+      return this.clientId;
+    }
     if (this.clientId) return this.clientId;
     
     try {
@@ -66,7 +71,7 @@ class SoundCloudProvider {
     } catch (error) {
       console.error('Client ID error:', error.message);
       // Use a fallback client ID that often works
-      this.clientId = 'iZIs9mchVcX5lhVRyQGGAYlNpVImz0XA';
+      this.clientId = 'khI8ciOiYPX6UVGInQY5zA0zvTkfzuuC';
       return this.clientId;
     }
   }
