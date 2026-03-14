@@ -115,10 +115,20 @@ const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
 // Import player manager
-const playerManager = require('./playerManager');
+const { getSession } = require('./playerManager');
 
-wss.on('connection', (ws) => {
-  console.log('New WebSocket client connected');
+wss.on('connection', (ws, req) => {
+  const url = req?.url || '';
+  let sid = 'global';
+  try {
+    const u = new URL(url, 'http://localhost');
+    sid = (u.searchParams.get('sid') || 'global').trim() || 'global';
+  } catch (e) {}
+
+  ws.sessionId = sid;
+  const playerManager = getSession(sid);
+
+  console.log('New WebSocket client connected', { sid });
   
   // Add client to player manager
   playerManager.addClient(ws);
@@ -130,7 +140,7 @@ wss.on('connection', (ws) => {
       
       // Handle player commands from clients
       if (data.type === 'playerCommand') {
-        handlePlayerCommand(data.action, data.payload);
+        handlePlayerCommand(playerManager, data.action, data.payload);
       }
       
       // Handle sync requests
@@ -143,7 +153,7 @@ wss.on('connection', (ws) => {
   });
 
   ws.on('close', () => {
-    console.log('Client disconnected');
+    console.log('Client disconnected', { sid });
     playerManager.removeClient(ws);
   });
 
@@ -154,7 +164,7 @@ wss.on('connection', (ws) => {
 });
 
 // Handle player commands
-function handlePlayerCommand(action, payload) {
+function handlePlayerCommand(playerManager, action, payload) {
   switch (action) {
     case 'play':
       playerManager.togglePlay();

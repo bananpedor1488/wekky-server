@@ -853,7 +853,9 @@ router.get('/soundcloud/:id', async (req, res) => {
 
 // Get current track audio stream URL (from player state)
 router.get('/current', async (req, res) => {
-  const playerManager = require('../playerManager');
+  const { getSession } = require('../playerManager');
+  const sid = String(req.query.sid || req.headers['x-session-id'] || 'global');
+  const playerManager = getSession(sid);
   const streamUrl = playerManager.getAudioStreamUrl();
   
   if (!streamUrl) {

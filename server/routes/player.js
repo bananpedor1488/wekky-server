@@ -1,9 +1,14 @@
 const express = require('express');
 const router = express.Router();
-const playerManager = require('../playerManager');
+const { getSession } = require('../playerManager');
+
+function getSid(req) {
+  return String(req.query.sid || req.headers['x-session-id'] || 'global');
+}
 
 // Get current player state
 router.get('/state', (req, res) => {
+  const playerManager = getSession(getSid(req));
   res.json({
     success: true,
     state: playerManager.getState()
@@ -13,6 +18,7 @@ router.get('/state', (req, res) => {
 // Play a track
 router.post('/play', async (req, res) => {
   try {
+    const playerManager = getSession(getSid(req));
     const { track, queue, index } = req.body;
     
     if (!track) {
@@ -33,6 +39,7 @@ router.post('/play', async (req, res) => {
 
 // Toggle play/pause
 router.post('/toggle', (req, res) => {
+  const playerManager = getSession(getSid(req));
   playerManager.togglePlay();
   res.json({
     success: true,
@@ -42,6 +49,7 @@ router.post('/toggle', (req, res) => {
 
 // Play
 router.post('/resume', (req, res) => {
+  const playerManager = getSession(getSid(req));
   if (!playerManager.state.isPlaying) {
     playerManager.togglePlay();
   }
@@ -53,6 +61,7 @@ router.post('/resume', (req, res) => {
 
 // Pause
 router.post('/pause', (req, res) => {
+  const playerManager = getSession(getSid(req));
   if (playerManager.state.isPlaying) {
     playerManager.togglePlay();
   }
@@ -64,6 +73,7 @@ router.post('/pause', (req, res) => {
 
 // Skip next
 router.post('/next', (req, res) => {
+  const playerManager = getSession(getSid(req));
   playerManager.skipNext();
   res.json({
     success: true,
@@ -73,6 +83,7 @@ router.post('/next', (req, res) => {
 
 // Skip previous
 router.post('/previous', (req, res) => {
+  const playerManager = getSession(getSid(req));
   playerManager.skipPrevious();
   res.json({
     success: true,
@@ -82,6 +93,7 @@ router.post('/previous', (req, res) => {
 
 // Seek
 router.post('/seek', (req, res) => {
+  const playerManager = getSession(getSid(req));
   const { time } = req.body;
   
   if (typeof time !== 'number') {
@@ -97,6 +109,7 @@ router.post('/seek', (req, res) => {
 
 // Toggle shuffle
 router.post('/shuffle', (req, res) => {
+  const playerManager = getSession(getSid(req));
   playerManager.toggleShuffle();
   res.json({
     success: true,
@@ -106,6 +119,7 @@ router.post('/shuffle', (req, res) => {
 
 // Toggle repeat
 router.post('/repeat', (req, res) => {
+  const playerManager = getSession(getSid(req));
   playerManager.toggleRepeat();
   res.json({
     success: true,
@@ -115,6 +129,7 @@ router.post('/repeat', (req, res) => {
 
 // Set volume
 router.post('/volume', (req, res) => {
+  const playerManager = getSession(getSid(req));
   const { volume } = req.body;
   
   if (typeof volume !== 'number') {
@@ -130,6 +145,7 @@ router.post('/volume', (req, res) => {
 
 // Add to queue
 router.post('/queue/add', (req, res) => {
+  const playerManager = getSession(getSid(req));
   const { track } = req.body;
   
   if (!track) {
@@ -145,6 +161,7 @@ router.post('/queue/add', (req, res) => {
 
 // Remove from queue
 router.post('/queue/remove', (req, res) => {
+  const playerManager = getSession(getSid(req));
   const { index } = req.body;
   
   if (typeof index !== 'number') {
@@ -160,6 +177,7 @@ router.post('/queue/remove', (req, res) => {
 
 // Clear queue
 router.post('/queue/clear', (req, res) => {
+  const playerManager = getSession(getSid(req));
   playerManager.clearQueue();
   res.json({
     success: true,
@@ -169,6 +187,7 @@ router.post('/queue/clear', (req, res) => {
 
 // Get queue
 router.get('/queue', (req, res) => {
+  const playerManager = getSession(getSid(req));
   res.json({
     success: true,
     queue: playerManager.state.queue,

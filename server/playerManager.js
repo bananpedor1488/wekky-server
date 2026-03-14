@@ -247,7 +247,25 @@ class PlayerManager extends EventEmitter {
   }
 }
 
-// Singleton instance
-const playerManager = new PlayerManager();
+const sessions = new Map();
 
-module.exports = playerManager;
+function normalizeSessionId(sessionId) {
+  if (typeof sessionId !== 'string') return 'global';
+  const s = sessionId.trim();
+  if (!s) return 'global';
+  // keep it small/safe
+  return s.slice(0, 128);
+}
+
+function getSession(sessionId) {
+  const sid = normalizeSessionId(sessionId);
+  let mgr = sessions.get(sid);
+  if (!mgr) {
+    mgr = new PlayerManager();
+    mgr.sessionId = sid;
+    sessions.set(sid, mgr);
+  }
+  return mgr;
+}
+
+module.exports = { getSession };
