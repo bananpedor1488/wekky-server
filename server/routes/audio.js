@@ -114,6 +114,12 @@ async function ensureYtDlpReady() {
         console.log('[yt-dlp] binary ready');
       }
 
+      try {
+        fs.chmodSync(target, 0o755);
+      } catch (e) {
+        console.log('[yt-dlp] chmod failed:', e?.message);
+      }
+
       ytDlpBinaryPath = target;
       // Recreate instance with explicit binary path so it won't spawn `yt-dlp` from PATH.
       ytDlp = new YTDlpWrap(ytDlpBinaryPath);
