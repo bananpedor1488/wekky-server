@@ -222,12 +222,17 @@ class PlayerManager extends EventEmitter {
     if (!this.state.currentTrack) return null;
     
     const track = this.state.currentTrack;
+    const hasRapidApiKey = Boolean(process.env.RAPIDAPI_YT_MP3_KEY);
+    const useYtMp3CacheEnv = String(process.env.USE_YT_MP3_CACHE || '').toLowerCase();
+    const useYtMp3Cache = (useYtMp3CacheEnv === '' || useYtMp3CacheEnv === 'true') && hasRapidApiKey;
     
     // Return proxied stream URL
     if (track.type === 'soundcloud' && track.streamUrl) {
       return `/api/audio/stream/soundcloud/${track.id}`;
     } else if (track.type === 'youtube') {
-      return `/api/audio/stream/youtube/${track.id}`;
+      return useYtMp3Cache
+        ? `/api/audio/stream/youtube-mp3-cache/${track.id}`
+        : `/api/audio/stream/youtube/${track.id}`;
     }
     
     return null;

@@ -2,9 +2,11 @@ const express = require('express');
 const router = express.Router();
 const { spawn } = require('child_process');
 const { Readable } = require('stream');
+const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const crypto = require('crypto');
 const soundcloudProvider = require('../providers/soundcloudProvider');
 let YTDlpWrapModule;
 try {
@@ -168,6 +170,218 @@ function pipeFetchBodyToRes(audioResponse, res) {
   }
 
   res.end();
+}
+
+const downloadUrlCache = new Map();
+const DOWNLOAD_URL_TTL_MS = 5 * 60 * 1000;
+
+const mp3Cache = new Map();
+
+const CACHE_DIR = path.join(os.tmpdir(), 'wekky-mp3-cache');
+if (!fs.existsSync(CACHE_DIR)) {
+  fs.mkdirSync(CACHE_DIR, { recursive: true });
+}
+
+function cacheKeyForUrl(videoUrl) {
+  return crypto.createHash('sha1').update(videoUrl).digest('hex');
+}
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+function getFileSizeSafe(p) {
+  try {
+    return fs.statSync(p).size;
+  } catch (_) {
+    return 0;
+  }
+}
+
+async function getDownloadUrlRapidApi(videoUrl) {
+  const key = process.env.RAPIDAPI_YT_MP3_KEY;
+  const host = process.env.RAPIDAPI_YT_MP3_HOST || 'youtube-mp310.p.rapidapi.com';
+  if (!key) {
+    throw new Error('RAPIDAPI_YT_MP3_KEY is not set');
+  }
+
+  const options = {
+    method: 'GET',
+    url: 'https://youtube-mp310.p.rapidapi.com/download/mp3',
+    params: { url: videoUrl },
+    headers: {
+      'x-rapidapi-key': key,
+      'x-rapidapi-host': host,
+    },
+    timeout: 20000,
+    validateStatus: () => true,
+  };
+
+  const response = await axios.request(options);
+  if (response.status >= 400) {
+    throw new Error(`RapidAPI failed with status ${response.status}`);
+  }
+  const downloadUrl = response.data?.downloadUrl;
+  if (!downloadUrl) {
+    throw new Error('RapidAPI response has no downloadUrl');
+  }
+  return downloadUrl;
+}
+
+async function getCachedDownloadUrl(videoUrl) {
+  const now = Date.now();
+  const cached = downloadUrlCache.get(videoUrl);
+  if (cached && (now - cached.createdAt) < DOWNLOAD_URL_TTL_MS) {
+    return cached.downloadUrl;
+  }
+  const downloadUrl = await getDownloadUrlRapidApi(videoUrl);
+  downloadUrlCache.set(videoUrl, { downloadUrl, createdAt: now });
+  return downloadUrl;
+}
+
+async function ensureDownloadStarted(videoUrl) {
+  const key = cacheKeyForUrl(videoUrl);
+  const filePath = path.join(CACHE_DIR, `${key}.mp3`);
+
+  let entry = mp3Cache.get(key);
+  if (!entry) {
+    entry = {
+      key,
+      videoUrl,
+      filePath,
+      totalSize: null,
+      downloading: false,
+      done: false,
+      error: null,
+    };
+    mp3Cache.set(key, entry);
+  }
+
+  if (entry.downloading || entry.done) {
+    return entry;
+  }
+
+  entry.downloading = true;
+  entry.error = null;
+
+  try {
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+    }
+    fs.closeSync(fs.openSync(filePath, 'a'));
+  } catch (e) {
+    entry.error = e;
+    entry.downloading = false;
+    return entry;
+  }
+
+  (async () => {
+    try {
+      const downloadUrl = await getCachedDownloadUrl(videoUrl);
+
+      const upstream = await axios({
+        method: 'GET',
+        url: downloadUrl,
+        responseType: 'stream',
+        timeout: 120000,
+        validateStatus: () => true,
+      });
+
+      if (upstream.status >= 400) {
+        downloadUrlCache.delete(videoUrl);
+        throw new Error(`Upstream failed with status ${upstream.status}`);
+      }
+
+      const lenHeader = upstream.headers?.['content-length'];
+      if (lenHeader && !Number.isNaN(Number(lenHeader))) {
+        entry.totalSize = Number(lenHeader);
+      }
+
+      const writer = fs.createWriteStream(filePath);
+      upstream.data.pipe(writer);
+
+      await new Promise((resolve, reject) => {
+        writer.on('finish', resolve);
+        writer.on('error', reject);
+        upstream.data.on('error', reject);
+      });
+
+      entry.done = true;
+      entry.downloading = false;
+    } catch (e) {
+      entry.error = e;
+      entry.downloading = false;
+      entry.done = false;
+    }
+  })();
+
+  return entry;
+}
+
+async function waitForAtLeast(filePath, minSize, maxWaitMs) {
+  const start = Date.now();
+  while (true) {
+    const size = getFileSizeSafe(filePath);
+    if (size >= minSize) return size;
+    if (Date.now() - start > maxWaitMs) return size;
+    await sleep(150);
+  }
+}
+
+function parseRange(rangeHeader) {
+  if (!rangeHeader) return null;
+  const m = /^bytes=(\d+)-(\d+)?$/i.exec(String(rangeHeader).trim());
+  if (!m) return null;
+  const start = Number(m[1]);
+  const end = m[2] !== undefined ? Number(m[2]) : null;
+  if (Number.isNaN(start) || (end !== null && Number.isNaN(end))) return null;
+  return { start, end };
+}
+
+async function streamFileProgressive({ req, res, filePath, start = 0, end = null, totalSize = null }) {
+  const maxWaitMs = 30000;
+  const needAtLeast = start + 1;
+  const availableSize = await waitForAtLeast(filePath, needAtLeast, maxWaitMs);
+  if (availableSize < needAtLeast) {
+    res.status(416);
+    res.setHeader('content-type', 'application/json');
+    res.end(JSON.stringify({ error: 'Not enough data downloaded yet' }));
+    return;
+  }
+
+  let effectiveEnd;
+  if (end === null) {
+    effectiveEnd = availableSize - 1;
+  } else {
+    const haveEnough = await waitForAtLeast(filePath, end + 1, maxWaitMs);
+    effectiveEnd = Math.min(end, Math.max(haveEnough - 1, start));
+  }
+
+  const chunkSize = effectiveEnd - start + 1;
+
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type');
+  res.setHeader('content-type', 'audio/mpeg');
+  res.setHeader('accept-ranges', 'bytes');
+  res.setHeader('cache-control', 'no-store');
+
+  if (totalSize !== null) {
+    res.setHeader('content-range', `bytes ${start}-${effectiveEnd}/${totalSize}`);
+  } else {
+    res.setHeader('content-range', `bytes ${start}-${effectiveEnd}/*`);
+  }
+  res.setHeader('content-length', chunkSize);
+  res.status(206);
+
+  const reader = fs.createReadStream(filePath, { start, end: effectiveEnd });
+
+  req.on('close', () => {
+    try {
+      reader.destroy();
+    } catch (_) {}
+  });
+
+  reader.pipe(res);
 }
 
 function serveLocalFileWithRange(req, res, filePath, contentType) {
@@ -412,6 +626,94 @@ router.get('/youtube/:id', async (req, res) => {
     res.status(isTimeout ? 504 : 500);
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
     res.end(msg);
+  }
+});
+
+router.get('/youtube-mp3-cache/:id', async (req, res) => {
+  const { id } = req.params;
+  const videoUrl = `https://www.youtube.com/watch?v=${id}`;
+
+  try {
+    const entry = await ensureDownloadStarted(videoUrl);
+    if (entry.error) {
+      res.status(502);
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ success: false, error: 'Failed to download/prepare MP3' }));
+      return;
+    }
+
+    const range = parseRange(req.headers.range);
+    if (range) {
+      await streamFileProgressive({
+        req,
+        res,
+        filePath: entry.filePath,
+        start: range.start,
+        end: range.end,
+        totalSize: entry.totalSize,
+      });
+      return;
+    }
+
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type');
+    res.setHeader('content-type', 'audio/mpeg');
+    res.setHeader('accept-ranges', 'bytes');
+    res.setHeader('cache-control', 'no-store');
+
+    const initialSize = await waitForAtLeast(entry.filePath, 1, 30000);
+    if (initialSize < 1) {
+      res.status(503);
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ success: false, error: 'MP3 is not ready yet, try again' }));
+      return;
+    }
+
+    res.status(200);
+    const reader = fs.createReadStream(entry.filePath, { start: 0 });
+    reader.on('error', () => {
+      if (!res.headersSent) res.status(502);
+      res.end();
+    });
+    req.on('close', () => {
+      try {
+        reader.destroy();
+      } catch (_) {}
+    });
+    reader.pipe(res);
+  } catch (e) {
+    res.status(502);
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ success: false, error: String(e?.message || 'Failed to fetch download URL') }));
+  }
+});
+
+router.get('/youtube-mp3-cache/:id/status', async (req, res) => {
+  const { id } = req.params;
+  const videoUrl = `https://www.youtube.com/watch?v=${id}`;
+
+  try {
+    const entry = await ensureDownloadStarted(videoUrl);
+
+    const bytesDownloaded = getFileSizeSafe(entry.filePath);
+    const totalSize = typeof entry.totalSize === 'number' ? entry.totalSize : null;
+    const percentage = totalSize && totalSize > 0 ? (bytesDownloaded / totalSize) * 100 : null;
+
+    res.json({
+      success: true,
+      id,
+      downloading: Boolean(entry.downloading),
+      done: Boolean(entry.done),
+      totalSize,
+      bytesDownloaded,
+      percentage,
+      error: entry.error ? String(entry.error?.message || entry.error) : null,
+    });
+  } catch (e) {
+    res.status(502).json({
+      success: false,
+      error: String(e?.message || 'Failed to get status'),
+    });
   }
 });
 
