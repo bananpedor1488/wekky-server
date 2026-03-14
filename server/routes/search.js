@@ -21,7 +21,18 @@ router.get('/', async (req, res) => {
     });
   } catch (error) {
     console.error('Global search error:', error);
-    res.status(500).json({ error: 'Search failed', message: error.message });
+    const lastError = typeof soundcloudProvider.getLastError === 'function'
+      ? soundcloudProvider.getLastError()
+      : null;
+    res.status(500).json({
+      success: false,
+      error: 'Search failed',
+      message: error.message,
+      details: lastError ? {
+        status: lastError.status || null,
+        message: lastError.message || null
+      } : null
+    });
   }
 });
 

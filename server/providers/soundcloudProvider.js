@@ -10,12 +10,41 @@ class SoundCloudProvider {
     this.baseUrl = 'https://soundcloud.com';
     this.apiBaseUrl = 'https://api-v2.soundcloud.com';
     this.clientId = null;
+    this.lastError = null;
     this.headers = {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       'Accept': 'application/json, text/plain, */*',
       'Accept-Language': 'en-US,en;q=0.9',
       'Referer': 'https://soundcloud.com/',
     };
+  }
+
+  getLastError() {
+    return this.lastError;
+  }
+
+  pickBestTranscoding(item) {
+    const transcodings = item?.media?.transcodings;
+    if (!Array.isArray(transcodings) || transcodings.length === 0) return null;
+
+    const safe = transcodings.filter((t) => {
+      const protocol = t?.format?.protocol;
+      if (!protocol) return false;
+      if (protocol.includes('encrypted')) return false;
+      return true;
+    });
+
+    const by = (pred) => safe.find(pred) || null;
+
+    return (
+      by((t) => t?.format?.protocol === 'progressive' && String(t?.format?.mime_type || '').includes('audio/mpeg')) ||
+      by((t) => t?.format?.protocol === 'progressive') ||
+      by((t) => t?.format?.protocol === 'hls' && String(t?.format?.mime_type || '').includes('audio/mpeg')) ||
+      by((t) => t?.format?.protocol === 'hls') ||
+      safe[0] ||
+      transcodings[0] ||
+      null
+    );
   }
 
   /**
@@ -97,6 +126,14 @@ class SoundCloudProvider {
         timeout: 10000
       });
 
+      if (response.status >= 400) {
+        const msg = `SoundCloud API status ${response.status}`;
+        this.lastError = { message: msg, status: response.status, data: response.data };
+        throw new Error(msg);
+      }
+
+      this.lastError = null;
+
       const results = [];
       const collection = response.data?.collection || [];
 
@@ -109,8 +146,12 @@ class SoundCloudProvider {
 
       return results;
     } catch (error) {
-      console.error('SoundCloud search error:', error.message);
-      return [];
+      const status = error?.response?.status;
+      const data = error?.response?.data;
+      const message = error?.message || 'SoundCloud search failed';
+      this.lastError = { message, status, data };
+      console.error('SoundCloud search error:', message);
+      throw error;
     }
   }
 
@@ -213,37 +254,57 @@ class SoundCloudProvider {
   async getStreamUrl(trackId) {
     try {
       const clientId = await this.getClientId();
-      
-      // First get the track details to get the transcoding
-      const track = await this.getTrack(trackId);
-      if (!track || !track.streamUrl) {
-        throw new Error('No stream URL available');
-      }
 
-      // Get the actual streaming URL
-      const response = await axios.get(track.streamUrl, {
+      const trackUrl = `${this.apiBaseUrl}/tracks/${trackId}`;
+      const trackRes = await axios.get(trackUrl, {
         headers: this.headers,
         params: { client_id: clientId },
-        timeout: 10000,
-        maxRedirects: 5
+        timeout: 10000
       });
 
+      const raw = trackRes.data;
+      const transcoding = this.pickBestTranscoding(raw);
+      const transcodingUrl = transcoding?.url;
+      const trackAuthorization = raw?.track_authorization || raw?.trackAuthorization || null;
+
+      if (!transcodingUrl) {
+        throw new Error('No transcoding URL available');
+      }
+
+      const isHls = transcoding?.format?.protocol === 'hls';
+      const mimeType = transcoding?.format?.mime_type || null;
+
+      const urlRes = await axios.get(transcodingUrl, {
+        headers: this.headers,
+        params: {
+          client_id: clientId,
+          ...(trackAuthorization ? { track_authorization: trackAuthorization } : {})
+        },
+        timeout: 10000,
+        maxRedirects: 5,
+        validateStatus: () => true
+      });
+
+      if (urlRes.status >= 400) {
+        throw new Error(`Failed to fetch stream URL (status ${urlRes.status})`);
+      }
+
+      const finalUrl = urlRes.data?.url || urlRes.request?.res?.responseUrl;
+      if (!finalUrl) {
+        throw new Error('No final stream URL returned');
+      }
+
       return {
-        url: response.data?.url || response.request?.res?.responseUrl,
+        url: finalUrl,
         trackId,
-        type: 'soundcloud'
+        type: 'soundcloud',
+        protocol: isHls ? 'hls' : 'progressive',
+        mimeType
       };
     } catch (error) {
       console.error('Stream URL error:', error.message);
-      
-      // Fallback: return the progressive mp3 URL format
-      const clientId = await this.getClientId();
-      return {
-        url: `https://api-v2.soundcloud.com/tracks/${trackId}/streams?client_id=${clientId}`,
-        trackId,
-        type: 'soundcloud',
-        format: 'api'
-      };
+
+      throw error;
     }
   }
 
@@ -325,6 +386,7 @@ class SoundCloudProvider {
     if (!item) return null;
 
     const artwork = item.artwork_url || item.user?.avatar_url;
+    const transcoding = this.pickBestTranscoding(item);
     
     return {
       id: item.id?.toString(),
@@ -339,11 +401,11 @@ class SoundCloudProvider {
       genre: item.genre || '',
       permalink: item.permalink,
       permalinkUrl: item.permalink_url,
-      streamUrl: item.media?.transcodings?.find(t => t.format?.protocol === 'progressive')?.url || 
-                item.media?.transcodings?.[0]?.url,
+      streamUrl: transcoding?.url || null,
       waveformUrl: item.waveform_url,
       playbackCount: item.playback_count,
       likesCount: item.likes_count,
+      trackAuthorization: item.track_authorization || null,
       type: 'soundcloud',
       url: item.permalink_url
     };
