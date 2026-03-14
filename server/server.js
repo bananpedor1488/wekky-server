@@ -76,6 +76,7 @@ const audioRoutes = require('./routes/audio');
 const lyricsRoutes = require('./routes/lyrics');
 const authRoutes = require('./routes/auth');
 const accountRoutes = require('./routes/account');
+const usersRoutes = require('./routes/users');
 
 app.use('/api/youtube', youtubeRoutes);
 app.use('/api/soundcloud', soundcloudRoutes);
@@ -85,6 +86,7 @@ app.use('/api/audio/stream', audioRoutes);
 app.use('/api/lyrics', lyricsRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/account', accountRoutes);
+app.use('/api/users', usersRoutes);
 
 app.get('/api', (req, res) => {
   res.json({

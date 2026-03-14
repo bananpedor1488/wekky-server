@@ -5,6 +5,21 @@ const User = require('../models/User');
 
 const router = express.Router();
 
+function toUserDto(user) {
+  return {
+    id: String(user._id),
+    email: user.email,
+    username: user.username,
+    displayName: user.displayName || '',
+    bio: user.bio || '',
+    avatarUrl: user.avatarUrl || '',
+    privacy: {
+      likesPublic: user?.privacy?.likesPublic !== false,
+      playlistsPublic: user?.privacy?.playlistsPublic !== false
+    }
+  };
+}
+
 function signToken(userId) {
   const secret = process.env.JWT_SECRET;
   if (!secret) throw new Error('JWT secret not configured');
@@ -48,7 +63,7 @@ router.post('/register', async (req, res) => {
     return res.json({
       success: true,
       token,
-      user: { id: String(user._id), email: user.email, username: user.username }
+      user: toUserDto(user)
     });
   } catch (error) {
     console.error('Register error:', error);
@@ -82,7 +97,7 @@ router.post('/login', async (req, res) => {
     return res.json({
       success: true,
       token,
-      user: { id: String(user._id), email: user.email, username: user.username }
+      user: toUserDto(user)
     });
   } catch (error) {
     console.error('Login error:', error);
@@ -105,14 +120,14 @@ router.get('/me', async (req, res) => {
     }
 
     const payload = jwt.verify(token, secret);
-    const user = await User.findById(payload.sub).select('_id email username');
+    const user = await User.findById(payload.sub).select('_id email username displayName bio avatarUrl privacy');
     if (!user) {
       return res.status(404).json({ success: false, error: 'user not found' });
     }
 
     return res.json({
       success: true,
-      user: { id: String(user._id), email: user.email, username: user.username }
+      user: toUserDto(user)
     });
   } catch (error) {
     return res.status(401).json({ success: false, error: 'Unauthorized' });
