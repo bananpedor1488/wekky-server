@@ -56,6 +56,26 @@ router.put('/profile', authRequired, async (req, res) => {
     const MAX_BANNER_BYTES = 900 * 1024;
 
     const update = {};
+    if (typeof body.username === 'string') {
+      const nextUsername = body.username.trim();
+      if (!nextUsername) {
+        return res.status(400).json({ success: false, error: 'username required' });
+      }
+      if (!/^[a-zA-Z0-9_\.]{3,20}$/.test(nextUsername)) {
+        return res.status(400).json({
+          success: false,
+          error: 'invalid username'
+        });
+      }
+      const existing = await User.findOne({
+        username: new RegExp(`^${nextUsername.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'),
+        _id: { $ne: userId }
+      }).select('_id');
+      if (existing) {
+        return res.status(409).json({ success: false, error: 'username already taken' });
+      }
+      update.username = nextUsername;
+    }
     if (typeof body.displayName === 'string') update.displayName = body.displayName.trim();
     if (typeof body.bio === 'string') update.bio = body.bio.trim();
     if (typeof body.avatarUrl === 'string') update.avatarUrl = body.avatarUrl.trim();
