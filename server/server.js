@@ -212,25 +212,24 @@ function handlePlayerCommand(playerManager, action, payload) {
 
 // Start server
 async function start() {
-  try {
-    const mongoUri = process.env.MONGODB_URI;
-    if (mongoUri) {
+  const mongoUri = process.env.MONGODB_URI;
+  if (mongoUri) {
+    try {
       await mongoose.connect(mongoUri);
       console.log('✅ MongoDB connected');
-    } else {
-      console.warn('⚠️  MONGODB_URI not set; auth/account routes will not work without MongoDB');
+    } catch (err) {
+      console.error('⚠️  MongoDB connection failed; continuing without DB:', err?.message || err);
     }
-
-    server.listen(PORT, '0.0.0.0', () => {
-      const externalUrl = process.env.RENDER_EXTERNAL_URL;
-      const baseUrl = externalUrl || `http://localhost:${PORT}`;
-      console.log(`🎵 iOS Music Player Server running on ${baseUrl}`);
-      console.log(`📱 API available at ${baseUrl}/api`);
-    });
-  } catch (err) {
-    console.error('Failed to start server:', err);
-    process.exit(1);
+  } else {
+    console.warn('⚠️  MONGODB_URI not set; auth/account routes will not work without MongoDB');
   }
+
+  server.listen(PORT, '0.0.0.0', () => {
+    const externalUrl = process.env.RENDER_EXTERNAL_URL;
+    const baseUrl = externalUrl || `http://localhost:${PORT}`;
+    console.log(`🎵 iOS Music Player Server running on ${baseUrl}`);
+    console.log(`📱 API available at ${baseUrl}/api`);
+  });
 }
 
 start();
