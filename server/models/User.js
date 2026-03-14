@@ -10,6 +10,8 @@ const UserSchema = new mongoose.Schema(
     avatarUrl: { type: String, default: '', trim: true },
     avatarBase64: { type: String, default: '' },
     bannerBase64: { type: String, default: '' },
+    followers: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User', default: [] }],
+    following: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User', default: [] }],
     privacy: {
       likesPublic: { type: Boolean, default: true },
       playlistsPublic: { type: Boolean, default: true }

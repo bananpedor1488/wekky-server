@@ -111,7 +111,7 @@ router.put('/profile', authRequired, async (req, res) => {
       userId,
       { $set: update },
       { new: true }
-    ).select('_id email username displayName bio avatarUrl avatarBase64 bannerBase64 privacy');
+    ).select('_id email username displayName bio avatarUrl avatarBase64 bannerBase64 followers following privacy');
 
     if (!user) {
       return res.status(404).json({ success: false, error: 'user not found' });
@@ -128,6 +128,8 @@ router.put('/profile', authRequired, async (req, res) => {
         avatarUrl: user.avatarUrl || '',
         avatarBase64: user.avatarBase64 || '',
         bannerBase64: user.bannerBase64 || '',
+        followersCount: Array.isArray(user.followers) ? user.followers.length : 0,
+        followingCount: Array.isArray(user.following) ? user.following.length : 0,
         privacy: {
           likesPublic: user?.privacy?.likesPublic !== false,
           playlistsPublic: user?.privacy?.playlistsPublic !== false
