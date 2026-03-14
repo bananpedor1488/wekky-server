@@ -39,10 +39,48 @@ router.put('/profile', authRequired, async (req, res) => {
     const userId = req.user.id;
     const body = req.body || {};
 
+    const isImageDataUrl = (s) => {
+      if (typeof s !== 'string') return false;
+      return /^data:image\/(png|jpe?g|webp|gif);base64,/i.test(s);
+    };
+
+    const byteLen = (s) => {
+      try {
+        return Buffer.byteLength(String(s || ''), 'utf8');
+      } catch (e) {
+        return String(s || '').length;
+      }
+    };
+
+    const MAX_AVATAR_BYTES = 350 * 1024;
+    const MAX_BANNER_BYTES = 900 * 1024;
+
     const update = {};
     if (typeof body.displayName === 'string') update.displayName = body.displayName.trim();
     if (typeof body.bio === 'string') update.bio = body.bio.trim();
     if (typeof body.avatarUrl === 'string') update.avatarUrl = body.avatarUrl.trim();
+
+    if (typeof body.avatarBase64 === 'string') {
+      const v = body.avatarBase64.trim();
+      if (v && !isImageDataUrl(v)) {
+        return res.status(400).json({ success: false, error: 'avatarBase64 must be a data:image/*;base64 URL' });
+      }
+      if (v && byteLen(v) > MAX_AVATAR_BYTES) {
+        return res.status(413).json({ success: false, error: 'avatar image too large' });
+      }
+      update.avatarBase64 = v;
+    }
+
+    if (typeof body.bannerBase64 === 'string') {
+      const v = body.bannerBase64.trim();
+      if (v && !isImageDataUrl(v)) {
+        return res.status(400).json({ success: false, error: 'bannerBase64 must be a data:image/*;base64 URL' });
+      }
+      if (v && byteLen(v) > MAX_BANNER_BYTES) {
+        return res.status(413).json({ success: false, error: 'banner image too large' });
+      }
+      update.bannerBase64 = v;
+    }
 
     if (body.privacy && typeof body.privacy === 'object') {
       if (typeof body.privacy.likesPublic === 'boolean') update['privacy.likesPublic'] = body.privacy.likesPublic;
@@ -53,7 +91,7 @@ router.put('/profile', authRequired, async (req, res) => {
       userId,
       { $set: update },
       { new: true }
-    ).select('_id email username displayName bio avatarUrl privacy');
+    ).select('_id email username displayName bio avatarUrl avatarBase64 bannerBase64 privacy');
 
     if (!user) {
       return res.status(404).json({ success: false, error: 'user not found' });
@@ -68,6 +106,8 @@ router.put('/profile', authRequired, async (req, res) => {
         displayName: user.displayName || '',
         bio: user.bio || '',
         avatarUrl: user.avatarUrl || '',
+        avatarBase64: user.avatarBase64 || '',
+        bannerBase64: user.bannerBase64 || '',
         privacy: {
           likesPublic: user?.privacy?.likesPublic !== false,
           playlistsPublic: user?.privacy?.playlistsPublic !== false

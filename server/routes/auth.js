@@ -13,6 +13,8 @@ function toUserDto(user) {
     displayName: user.displayName || '',
     bio: user.bio || '',
     avatarUrl: user.avatarUrl || '',
+    avatarBase64: user.avatarBase64 || '',
+    bannerBase64: user.bannerBase64 || '',
     privacy: {
       likesPublic: user?.privacy?.likesPublic !== false,
       playlistsPublic: user?.privacy?.playlistsPublic !== false
@@ -120,7 +122,7 @@ router.get('/me', async (req, res) => {
     }
 
     const payload = jwt.verify(token, secret);
-    const user = await User.findById(payload.sub).select('_id email username displayName bio avatarUrl privacy');
+    const user = await User.findById(payload.sub).select('_id email username displayName bio avatarUrl avatarBase64 bannerBase64 privacy');
     if (!user) {
       return res.status(404).json({ success: false, error: 'user not found' });
     }

@@ -11,6 +11,8 @@ function toPublicUserDto(user) {
     displayName: user.displayName || '',
     bio: user.bio || '',
     avatarUrl: user.avatarUrl || '',
+    avatarBase64: user.avatarBase64 || '',
+    bannerBase64: user.bannerBase64 || '',
     privacy: {
       likesPublic: user?.privacy?.likesPublic !== false,
       playlistsPublic: user?.privacy?.playlistsPublic !== false
@@ -32,7 +34,7 @@ router.get('/search', async (req, res) => {
     const users = await User.find({
       $or: [{ username: re }, { displayName: re }]
     })
-      .select('_id username displayName bio avatarUrl privacy')
+      .select('_id username displayName bio avatarUrl avatarBase64 bannerBase64 privacy')
       .limit(limit)
       .lean();
 
@@ -53,7 +55,7 @@ router.get('/:username', async (req, res) => {
     if (!username) return res.status(400).json({ success: false, error: 'username required' });
 
     const user = await User.findOne({ username: new RegExp(`^${username.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') })
-      .select('_id username displayName bio avatarUrl privacy')
+      .select('_id username displayName bio avatarUrl avatarBase64 bannerBase64 privacy')
       .lean();
 
     if (!user) return res.status(404).json({ success: false, error: 'user not found' });

@@ -8,6 +8,8 @@ const UserSchema = new mongoose.Schema(
     displayName: { type: String, default: '', trim: true },
     bio: { type: String, default: '', trim: true },
     avatarUrl: { type: String, default: '', trim: true },
+    avatarBase64: { type: String, default: '' },
+    bannerBase64: { type: String, default: '' },
     privacy: {
       likesPublic: { type: Boolean, default: true },
       playlistsPublic: { type: Boolean, default: true }
