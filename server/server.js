@@ -6,6 +6,9 @@ const WebSocket = require('ws');
 const http = require('http');
 const https = require('https');
 
+require('dotenv').config();
+const mongoose = require('mongoose');
+
 const app = express();
 const PORT = process.env.PORT || 3001;
 
@@ -71,6 +74,8 @@ const searchRoutes = require('./routes/search');
 const playerRoutes = require('./routes/player');
 const audioRoutes = require('./routes/audio');
 const lyricsRoutes = require('./routes/lyrics');
+const authRoutes = require('./routes/auth');
+const accountRoutes = require('./routes/account');
 
 app.use('/api/youtube', youtubeRoutes);
 app.use('/api/soundcloud', soundcloudRoutes);
@@ -78,6 +83,8 @@ app.use('/api/search', searchRoutes);
 app.use('/api/player', playerRoutes);
 app.use('/api/audio/stream', audioRoutes);
 app.use('/api/lyrics', lyricsRoutes);
+app.use('/api/auth', authRoutes);
+app.use('/api/account', accountRoutes);
 
 app.get('/api', (req, res) => {
   res.json({
@@ -204,11 +211,28 @@ function handlePlayerCommand(playerManager, action, payload) {
 }
 
 // Start server
-server.listen(PORT, '0.0.0.0', () => {
-  const externalUrl = process.env.RENDER_EXTERNAL_URL;
-  const baseUrl = externalUrl || `http://localhost:${PORT}`;
-  console.log(`🎵 iOS Music Player Server running on ${baseUrl}`);
-  console.log(`📱 API available at ${baseUrl}/api`);
-});
+async function start() {
+  try {
+    const mongoUri = process.env.MONGODB_URI;
+    if (mongoUri) {
+      await mongoose.connect(mongoUri);
+      console.log('✅ MongoDB connected');
+    } else {
+      console.warn('⚠️  MONGODB_URI not set; auth/account routes will not work without MongoDB');
+    }
+
+    server.listen(PORT, '0.0.0.0', () => {
+      const externalUrl = process.env.RENDER_EXTERNAL_URL;
+      const baseUrl = externalUrl || `http://localhost:${PORT}`;
+      console.log(`🎵 iOS Music Player Server running on ${baseUrl}`);
+      console.log(`📱 API available at ${baseUrl}/api`);
+    });
+  } catch (err) {
+    console.error('Failed to start server:', err);
+    process.exit(1);
+  }
+}
+
+start();
 
 module.exports = { app, server, wss };
