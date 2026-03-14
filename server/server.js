@@ -18,7 +18,33 @@ process.on('uncaughtException', (err) => {
 });
 
 // Middleware
-app.use(cors());
+const allowedOrigins = [
+  'http://localhost:3000',
+  'http://127.0.0.1:3000',
+  'https://weeky-six.vercel.app'
+];
+
+function isAllowedOrigin(origin) {
+  if (!origin) return true;
+  if (allowedOrigins.includes(origin)) return true;
+  // Allow LAN dev (e.g. http://192.168.0.10:3000)
+  if (/^http:\/\/(192\.168\.|10\.|172\.(1[6-9]|2\d|3[0-1])\.)\d{1,3}\.\d{1,3}:3000$/.test(origin)) {
+    return true;
+  }
+  return false;
+}
+
+app.use(cors({
+  origin: (origin, cb) => {
+    if (isAllowedOrigin(origin)) return cb(null, true);
+    return cb(new Error(`CORS blocked for origin: ${origin}`));
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Range'],
+  exposedHeaders: ['Content-Range', 'Accept-Ranges', 'Content-Length'],
+  optionsSuccessStatus: 204
+}));
 app.use(express.json());
 
 app.use((req, res, next) => {
